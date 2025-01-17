@@ -3,12 +3,20 @@ import matplotlib.pyplot as plt
 import math
 
 
-def ccf(ml_utility, max_utility):
+def ccf_old(ml_utility, max_utility):
     if ml_utility<=0:
         return None
     else:
         return min(max_utility, ml_utility*1.5)
     
+def ccf(ml_utility,max_utility, ccf_beta=3.0):
+    if ml_utility<0:
+        return 0.0
+    #elif ml_utility<=0.4:
+        #return min(max_utility, ml_utility**3 + 0.2)
+    else:
+        return min(max_utility, 1/(np.exp(-ccf_beta*ml_utility)+1))
+
 def get_error(data_size, c=1.0):
     if data_size<=0:
         return None
@@ -68,6 +76,9 @@ class ContinuousEnvironment:
         self.intersections = []
         self.next_angle = 0
         self.angles = []
+        self.ccf_beta = params["ccf_beta"]
+        self.filename = params["filename"]
+        self.data_variance = params["data_variance"]
         
     def collect_data(self):
         self.current_datasize = self.current_datasize+self.data_collection_size
@@ -77,11 +88,11 @@ class ContinuousEnvironment:
         if action == "collect":
             self.accumulated_utility.append(self.current_utility)
             self.current_datasize = self.collect_data()
-            self.current_error = get_error(self.current_datasize)
+            self.current_error = get_error(self.current_datasize, c=self.data_variance)
             learning_trajectory = get_angle(self.current_error)
             self.next_angle = learning_trajectory
             self.next_ml_utility,_ = calculate_intersection(learning_trajectory,self.current_utility)
-            self.next_utility = ccf(self.next_ml_utility,self.max_utility)
+            self.next_utility = ccf(self.next_ml_utility,self.max_utility, ccf_beta=self.ccf_beta)
             self.intersection = self.next_ml_utility
         elif action == "deploy":
             #print(self.current_error)
@@ -106,18 +117,20 @@ class ContinuousEnvironment:
         y_vals = x_vals
         
         x,y = zip(*self.points)
-        
+        ccf_vals = [ccf(xs,1.0, self.ccf_beta) for xs in x_vals]
         ax.plot(x_vals, y_vals, label="Diagonal f(x) = x", linestyle="--")
         ax.scatter(x,y, color='red')
         ax.scatter(self.intersections, self.intersections, color='green')
-        ax.plot(x,y, color='red', linestyle="--")
-        
+        #ax.plot(x,y, color='red', linestyle="--")
+        ax.plot(x_vals,ccf_vals, color='red', linestyle="--")
         ys = [item for pair in zip(self.intersections,y) for item in pair]
         xs = [item for item in x for _ in range(2)]
         ax.plot(xs,ys, color='blue')
+        
         plt.ylabel("ML+Human Utility")
         plt.xlabel("ML Utility")
         plt.title("Deployment Strategy")
         plt.grid()
-        plt.show()
-
+        #plt.show()
+        plt.savefig(self.filename, format='png', dpi=300)
+        plt.close(fig)

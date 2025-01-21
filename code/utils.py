@@ -1,13 +1,160 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import random
+from collections import deque
 
 
-def ccf_old(ml_utility, max_utility):
-    if ml_utility<=0:
-        return None
-    else:
-        return min(max_utility, ml_utility*1.5)
+
+class QNetwork(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(QNetwork, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(input_size, 64),
+            nn.ReLU(),
+            nn.Linear(64,64),
+            nn.ReLU(),
+            nn.Linear(64, output_size),  # Output Q-values for each action
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, x):
+        return self.fc(x)
+
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((
+            torch.tensor(state, dtype=torch.float32), 
+            action, 
+            reward, 
+            torch.tensor(next_state, dtype=torch.float32), 
+            done
+        ))
+
+    def sample(self, batch_size):
+        return random.sample(self.buffer, batch_size)
+
+    def __len__(self):
+        return len(self.buffer)
+
+
+def train_q_learning(params, q_net, target_net, optimizer, replay_buffer, num_episodes=700, batch_size=64, gamma=0.999, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=500, episode_length=10, deployment_cost=0.1):
+    epsilon = epsilon_start
+    epsilon_decay_rate = (epsilon_start - epsilon_end) / epsilon_decay
+    target_update_freq = 10
+    replay_start_size = 100
+    total_rewards = []
+    plot_reward_series = []
+
+    for episode in range(num_episodes):
+        env = ContinuousEnvironment(params)
+        state = torch.tensor([env.current_error, env.current_utility], dtype=torch.float32)
+        episode_reward = 0
+        reward_series = []
+        for t in range(episode_length):  # Limit steps per episode
+            # Epsilon-greedy action selection
+            if random.random() < epsilon:
+                action = random.randint(0, 1)  # Random action
+            else:
+                with torch.no_grad():
+                    q_values = q_net(state)
+                    #print(q_values)
+                    action = torch.argmax(q_values).item()
+
+            action_str = "collect" if action == 0 else "deploy"
+            # print(action_str)
+            #prev_utility = env.current_utility
+
+            # Take action in the environment
+            env.step(action_str) #already updated
+            #env.render()
+            #next_state = torch.tensor([env.current_utility], dtype=torch.float32)
+            next_state = torch.tensor([env.current_error,env.current_utility], dtype=torch.float32)
+            if action_str == "collect":
+                reward = env.current_utility
+            else:
+                reward = env.current_utility - deployment_cost
+            done = t == (episode_length-1)
+            reward_series.append(reward)
+            # Store transition in replay buffer
+            replay_buffer.push(state, action, reward, next_state, done)
+
+            # Update state and accumulate reward
+            state = next_state
+            episode_reward += reward
+
+            # Train the Q-network if enough samples are in the replay buffer
+            if len(replay_buffer) > replay_start_size:
+                transitions = replay_buffer.sample(batch_size)
+                batch = {
+                    "state": torch.stack([k[0] for k in transitions]), #maybe current utility+current_error
+                    "action": torch.tensor([k[1] for k in transitions]),
+                    "reward": torch.tensor([k[2] for k in transitions]),
+                    "next_state": torch.stack([k[3] for k in transitions]),
+                    "done": torch.tensor([k[4] for k in transitions], dtype=torch.float32)
+                }
+
+                # Compute Q-targets
+                with torch.no_grad():
+                    # Compute the target Q-value using the current environment's utility
+                    #max_next_q_values = torch.tensor(ccf(env.current_utility, params["max_utility"]), dtype=torch.float32)
+                    max_next_q_values = target_net(batch["next_state"]).max(1)[0]
+                    # TD Target
+                    q_targets = batch["reward"] + gamma * max_next_q_values * (1 - batch["done"])
+
+                    # Predicted Q-value for the taken action
+                q_targets = q_targets.float()
+                q_values = q_net(batch["state"]).gather(1, batch["action"].unsqueeze(1)).squeeze().float()
+                
+                # Compute loss (MSE or Huber)
+                loss_fn = nn.HuberLoss()  # You can replace this with nn.HuberLoss() for more stability
+                loss = loss_fn(q_values, q_targets) #estimated regret
+
+                #if episode % 10 == 0:
+                #    print(loss.item())
+                # Update Q-network
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            # Break if terminal state is reached
+            if done:
+                break
+
+        # Decay epsilon
+        epsilon = max(epsilon_end, epsilon - epsilon_decay_rate)
+
+        # Update target network
+        if episode % target_update_freq == 0:
+            target_net.load_state_dict(q_net.state_dict())
+        if len(total_rewards) == 0 or max(total_rewards)< episode_reward:
+            env.render()
+        if episode == 499:
+            env.render(other_filename=f"strategy_noise_test")
+        total_rewards.append(episode_reward)
+        plot_reward_series.append(reward_series)
+        #if episode % 10 == 0:
+        #    print(f"Episode {episode}: Total Reward: {episode_reward:.5f}, Epsilon: {epsilon:.2f}")
+        
+
+    return total_rewards, plot_reward_series
+
+def get_upperbound(start_utility, episode_length=10, deployment_cost=0.015, max_utility=1.0, ccf_beta=3.0):
+    current_utility = start_utility
+    utilities = [current_utility]
+    for i in range(0,episode_length):
+        if current_utility+deployment_cost<1.0:
+            current_utility = ccf(current_utility,max_utility, ccf_beta=ccf_beta)-deployment_cost
+        elif current_utility+deployment_cost == 1:
+            current_utility = 1.0
+        utilities.append(current_utility)
+    return utilities
     
 def get_discounted_utility(discount_factor,utilityseries):
     utility = 0
@@ -20,9 +167,9 @@ def get_discounted_utility(discount_factor,utilityseries):
 def ccf(ml_utility,max_utility, ccf_beta=3.0):
     if ml_utility<0:
         return 0.0
-    elif ml_utility<=0.25:
-        #return 0.25+0.1*math.sin(500*math.pi*25*ml_utility)
-        return 0.4
+    # elif ml_utility<=0.25:
+    #     #return 0.25+0.1*math.sin(500*math.pi*25*ml_utility)
+    #     return 0.2+0.5*ml_utility
     else:
         return min(max_utility, 1/(np.exp(-ccf_beta*ml_utility)+1))
 

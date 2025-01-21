@@ -9,11 +9,20 @@ def ccf_old(ml_utility, max_utility):
     else:
         return min(max_utility, ml_utility*1.5)
     
+def get_discounted_utility(discount_factor,utilityseries):
+    utility = 0
+    # print(discount_factor)
+    # print(utilityseries)
+    for i in range(0,len(utilityseries)):
+        utility = utility + utilityseries[i] * (1+discount_factor)**(-i)
+    return utility
+
 def ccf(ml_utility,max_utility, ccf_beta=3.0):
     if ml_utility<0:
         return 0.0
-    #elif ml_utility<=0.4:
-        #return min(max_utility, ml_utility**3 + 0.2)
+    elif ml_utility<=0.25:
+        #return 0.25+0.1*math.sin(500*math.pi*25*ml_utility)
+        return 0.4
     else:
         return min(max_utility, 1/(np.exp(-ccf_beta*ml_utility)+1))
 
@@ -109,7 +118,7 @@ class ContinuousEnvironment:
         #print(f"Current Utility {self.current_utility}")
         #print(f"Next Utility {self.next_utility}")
 
-    def render(self):
+    def render(self, other_filename=None):
         #diagonal f(x) = x
         fig, ax = plt.subplots(figsize=(10,7))
 
@@ -132,5 +141,7 @@ class ContinuousEnvironment:
         plt.title("Deployment Strategy")
         plt.grid()
         #plt.show()
+        if other_filename:
+            plt.savefig(other_filename, format='png', dpi=300)
         plt.savefig(self.filename, format='png', dpi=300)
         plt.close(fig)

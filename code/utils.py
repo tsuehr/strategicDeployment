@@ -113,7 +113,7 @@ def train_q_learning(params, q_net, target_net, optimizer, replay_buffer, num_ep
                 q_values = q_net(batch["state"]).gather(1, batch["action"].unsqueeze(1)).squeeze().float()
                 
                 # Compute loss (MSE or Huber)
-                loss_fn = nn.HuberLoss()  # You can replace this with nn.HuberLoss() for more stability
+                loss_fn = nn.MSELoss()  # You can replace this with nn.HuberLoss() for more stability
                 loss = loss_fn(q_values, q_targets) #estimated regret
 
                 #if episode % 10 == 0:
